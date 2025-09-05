@@ -1,0 +1,240 @@
+/*
+  ============================================================
+   🌊 ESP32 Water Quality Monitoring (TDS + EC + Temperature)
+  ============================================================
+
+   📌 Description:
+   This project uses an ESP32, DS18B20 temperature sensor, 
+   and a TDS sensor to measure water quality parameters:
+     - TDS (Total Dissolved Solids) in ppm
+     - EC (Electrical Conductivity) in mS/cm
+     - Temperature in °C and °F
+
+   📡 Features:
+     - ESP32 Web Server to display sensor data in real-time
+     - OLED display for local monitoring
+     - Noise reduction using averaging method
+     - Static IP configuration for stable access
+     - Auto-refreshing web page every 2 seconds
+
+   🛠 Hardware:
+     - ESP32 Dev Board
+     - DS18B20 Temperature Sensor
+     - TDS Sensor Module
+     - SSD1306 OLED Display (I2C)
+     - Jumper Wires, Breadboard
+
+   ⚙️ Author:
+     Designed & Developed by Md Mizanur Rahman
+     
+*/
+
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <WiFi.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+// OLED config
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// WiFi credentials
+const char* ssid = "TheMiz";
+const char* password = "Themizanur";
+
+// Static IP configuration
+IPAddress local_IP(192, 168, 255, 177);
+IPAddress gateway(192, 168, 1, 1);
+IPAddress subnet(255, 255, 255, 0);
+IPAddress primaryDNS(8, 8, 8, 8);
+IPAddress secondaryDNS(8, 8, 4, 4);
+
+// Web server running on port 80
+WiFiServer server(80);
+
+// Pin definitions
+#define DSPIN 26        // DS18B20 temperature sensor pin
+#define TDS_Sensor 36   // TDS analog input pin
+
+// Calibration and reference values
+float Aref = 3.3;
+float ec_Val = 0;
+unsigned int tds_value = 0;
+float ecCal = 5;
+double wTemp;
+const int sampleCount = 10;
+
+// OneWire and temperature sensor setup
+OneWire oneWire(DSPIN);
+DallasTemperature sensors(&oneWire);
+
+// Function to average analog readings with noise reduction
+int getAverageAnalogValue(int pin, int samples) {
+  uint16_t readings[samples];
+  long total = 0;
+
+  for (int i = 0; i < samples; i++) {
+    readings[i] = analogRead(pin);
+    total += readings[i];
+    delayMicroseconds(500);
+  }
+
+  uint16_t maxVal = readings[0], minVal = readings[0];
+  for (int i = 1; i < samples; i++) {
+    if (readings[i] > maxVal) maxVal = readings[i];
+    if (readings[i] < minVal) minVal = readings[i];
+  }
+
+  total -= maxVal;
+  total -= minVal;
+
+  return total / (samples - 2);
+}
+
+// Function to read sensor data and print to Serial
+void readSensorData() {
+  sensors.requestTemperatures();
+  wTemp = sensors.getTempCByIndex(0);
+
+  if (wTemp == DEVICE_DISCONNECTED_C) {
+    Serial.println("Error: DS18B20 not detected!");
+    return;
+  }
+
+  int analogAverage = getAverageAnalogValue(TDS_Sensor, sampleCount);
+  float V_level = Aref / 1024.0;
+  float rawVoltage = analogAverage * V_level;
+
+  float T_Cof = 1.0 + 0.02 * (wTemp - 25.0);
+  ec_Val = (rawVoltage / T_Cof) * ecCal;
+  tds_value = ec_Val * 640;
+
+  double Far = (wTemp * 9.0 / 5.0) + 32.0;
+
+  // Print to Serial Monitor
+  Serial.println("----- Sensor Readings -----");
+  Serial.print("TDS: "); Serial.print(tds_value); Serial.println(" ppm");
+  Serial.print("EC: "); Serial.print(ec_Val, 2); Serial.println(" mS/cm");
+  Serial.print("Temperature (°C): "); Serial.println(wTemp, 2);
+  Serial.print("Temperature (°F): "); Serial.println(Far, 2);
+  Serial.println();
+}
+
+// Function to update OLED display
+void updateOLED() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.setCursor(0, 0);
+
+  display.print("IP: ");
+  display.println(WiFi.localIP());
+
+  display.setCursor(0, 10);
+  display.print("TDS: ");
+  display.print(tds_value);
+  display.println(" ppm");
+
+  display.setCursor(0, 20);
+  display.print("EC: ");
+  display.print(ec_Val, 2);
+  display.println(" mS/cm");
+
+  display.setCursor(0, 30);
+  display.print("Temp: ");
+  display.print(wTemp, 1);
+  display.println(" C");
+
+  display.setCursor(0, 44);
+  display.println("Design by:");
+  display.print("Md Mizanur Rahman");
+  display.display();
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+
+  Serial.println("Booting ESP32...");
+  sensors.begin();
+
+  // OLED init
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println(F("OLED allocation failed"));
+    while (true);
+  }
+  display.clearDisplay();
+  display.display();
+
+  // Static IP setup
+  if (!WiFi.config(local_IP, gateway, subnet, primaryDNS, secondaryDNS)) {
+    Serial.println("STA Failed to configure static IP");
+  }
+
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("\nConnected to WiFi!");
+  Serial.print("ESP32 Static IP Address: ");
+  Serial.println(WiFi.localIP());
+
+  server.begin();
+}
+
+void loop() {
+  readSensorData();
+  updateOLED();
+
+  WiFiClient client = server.available();
+
+  if (client) {
+    Serial.println("Client connected.");
+    while (!client.available()) {
+      delay(1);
+    }
+
+    String request = client.readStringUntil('\r');
+    Serial.println("HTTP Request: " + request);
+    client.flush();
+
+    double Far = (wTemp * 9.0 / 5.0) + 32.0;
+
+    // Send HTTP response
+    client.println("HTTP/1.1 200 OK");
+    client.println("Content-Type: text/html");
+    client.println("Connection: close");
+    client.println();
+    client.println("<!DOCTYPE html>");
+    client.println("<html><head>");
+    client.println("<meta name='viewport' content='width=device-width, initial-scale=1.0'>");
+    client.println("<meta http-equiv='refresh' content='2'>");
+    client.println("<title>Mini Project Data</title>");
+    client.println("<style>");
+    client.println("body { font-family: Arial; background: #f0f0f0; padding: 20px; }");
+    client.println(".container { background: #fff; padding: 20px; border-radius: 10px; max-width: 600px; margin: auto; }");
+    client.println("h1 { text-align: center; color: #333; }");
+    client.println("p { font-size: 1.2em; color: #02aab0; }");
+    client.println("</style>");
+    client.println("</head><body>");
+    client.println("<div class='container'>");
+    client.println("<h1>My project's data</h1>");
+    client.print("<p><strong>TDS:</strong> "); client.print(tds_value); client.println(" ppm</p>");
+    client.print("<p><strong>EC:</strong> "); client.print(ec_Val, 2); client.println(" mS/cm</p>");
+    client.print("<p><strong>Temperature (°C):</strong> "); client.print(wTemp, 2); client.println("</p>");
+    client.print("<p><strong>Temperature (°F):</strong> "); client.print(Far, 2); client.println("</p>");
+    client.println("</div></body></html>");
+
+    delay(10);
+    client.stop();
+    Serial.println("Client disconnected.");
+  }
+
+  delay(2000);
+}
