@@ -16,3 +16,20 @@ Continuously updated every 2 seconds
 🖼 Web Dashboard Preview
 Auto-refreshing web page with clean UI.
 Shows TDS, EC, and Temperature values in real time.
+
+🔧 Hardware Required
+
+ESP32 Dev Board
+DS18B20 Temperature Sensor
+TDS Sensor Module
+0.96" SSD1306 OLED Display (I2C)
+Jumper Wires + Breadboard
+
+📡 Circuit Connections
+DS18B20 → GPIO 26
+TDS Sensor (Analog Out) → GPIO 36
+OLED (SDA, SCL) → ESP32 I2C Pins (default: GPIO 21, 22)
+
+👨‍💻 Author:
+Md Mizanur Rahman
+Designed & Developed for IoT-based water quality monitoring.
